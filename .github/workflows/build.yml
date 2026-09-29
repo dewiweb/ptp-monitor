@@ -25,9 +25,7 @@ jobs:
         run: pip install -r requirements-build.txt
 
       - name: Build executable
-        run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed ^
-            --name PTPMonitor main.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name PTPMonitor main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
