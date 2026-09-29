@@ -22,9 +22,24 @@ class SourceStats:
         self.intervals = deque(maxlen=INTERVAL_WINDOW)  # intervalles entre Sync (s)
         self.last_sync_ts = None
         self.reported_silent = False
+        # EMA de l'intervalle inter-paquets : seuil de silence adaptatif
+        # (un device qui émet naturellement toutes les ~30s ne doit pas
+        # être signalé silencieux en boucle)
+        self.gap_ema = None
+
+    def silence_threshold(self):
+        """Seuil en s au-delà duquel la source est considérée silencieuse."""
+        if self.gap_ema is None:
+            return 30.0
+        return max(30.0, 5.0 * self.gap_ema)
 
     def update(self, ev, p):
         self.count += 1
+        if self.last:
+            gap = ev["ts"] - self.last
+            if gap > 0:
+                self.gap_ema = (gap if self.gap_ema is None
+                                else 0.9 * self.gap_ema + 0.1 * gap)
         self.last = ev["ts"]
         if not self.first:
             self.first = ev["ts"]

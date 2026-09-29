@@ -631,13 +631,15 @@ class MainWindow(QMainWindow):
                 self._last_heartbeat = now
                 self._log("STATUS",
                           f"{self.total_packets} paquets reçus, "
-                          f"{len([s for s in self.sources.values() if now - s.last <= 30])} sources actives, "
+                          f"{len([s for s in self.sources.values() if now - s.last <= s.silence_threshold()])} sources actives, "
                           f"{len(self.malformed)} malformés")
 
-        # Détection de silence : source qui se tait (>30s sans paquet)
+        # Détection de silence : seuil adaptatif par source
+        # (max 30s ou 5× son intervalle habituel)
         if self.listener:
             for (version, src), s in self.sources.items():
-                if not s.reported_silent and now - s.last > 30:
+                if not s.reported_silent \
+                        and now - s.last > s.silence_threshold():
                     s.reported_silent = True
                     self._log("WARN",
                               f"SOURCE SILENCIEUSE : {name_or_ip(src)} "
@@ -677,7 +679,8 @@ class MainWindow(QMainWindow):
                               f"Announce PTPv2 de retour : {name_or_ip(src)}",
                               {"src_ip": src})
 
-        active = {k: s for k, s in self.sources.items() if now - s.last <= 30}
+        active = {k: s for k, s in self.sources.items()
+                  if now - s.last <= s.silence_threshold()}
 
         # Réutiliser les lignes existantes
         self.tbl_sources.setRowCount(len(active))
