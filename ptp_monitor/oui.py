@@ -80,13 +80,22 @@ def load_oui_database():
 
 
 def download_oui_csv(path=None):
-    """Télécharge la base OUI officielle IEEE. Lève une exception en cas
+    """Télécharge la base OUI officielle IEEE (atomique : .tmp puis renommé,
+    pour ne pas laisser un fichier tronqué). Lève une exception en cas
     d'échec. À appeler depuis un thread de fond."""
     path = path or os.path.join(APP_DIR, "oui.csv")
+    tmp = path + ".tmp"
     req = urllib.request.Request(OUI_CSV_URL,
                                  headers={"User-Agent": "ptp-monitor"})
-    with urllib.request.urlopen(req, timeout=20) as r, open(path, "wb") as f:
-        shutil.copyfileobj(r, f)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r, \
+                open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def reload():

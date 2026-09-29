@@ -3,8 +3,11 @@
 import os
 import sys
 
-# Multicast PTP standard (UDP 319 = event, 320 = general)
+# Multicast PTP standard (UDP 319 = event, 320 = general).
+# IEEE 1588 réserve 224.0.1.129-132 ; Dante peut utiliser les groupes
+# alternés pour des domaines PTP séparés.
 PTP_MCAST = "224.0.1.129"
+PTP_MCAST_ALL = ["224.0.1.129", "224.0.1.130", "224.0.1.131", "224.0.1.132"]
 PTP_EVENT_PORT = 319
 PTP_GENERAL_PORT = 320
 

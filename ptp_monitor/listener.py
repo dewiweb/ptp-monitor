@@ -9,7 +9,8 @@ import time
 
 from PySide6.QtCore import QThread, Signal
 
-from .constants import PTP_EVENT_PORT, PTP_GENERAL_PORT, PTP_MCAST
+from .constants import (
+    PTP_EVENT_PORT, PTP_GENERAL_PORT, PTP_MCAST, PTP_MCAST_ALL)
 from .devices import HOSTNAMES, resolve_ptr
 from .parser import parse_ptp
 
@@ -49,15 +50,18 @@ class PtpListener(QThread):
         sock.bind(("", port))
         joined = []
         for ip in self.iface_ips:
-            try:
-                mreq = struct.pack("4s4s", socket.inet_aton(PTP_MCAST),
-                                   socket.inet_aton(ip))
-                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-                                mreq)
-                joined.append(ip)
-            except OSError as e:
-                self.error.emit(f"IGMP join échoué sur {ip}:{port} : {e}")
-        self.info.emit(f"UDP {port} : joint {PTP_MCAST} sur {joined}")
+            for group in PTP_MCAST_ALL:
+                try:
+                    mreq = struct.pack("4s4s", socket.inet_aton(group),
+                                       socket.inet_aton(ip))
+                    sock.setsockopt(socket.IPPROTO_IP,
+                                    socket.IP_ADD_MEMBERSHIP, mreq)
+                except OSError as e:
+                    self.error.emit(
+                        f"IGMP join {group} échoué sur {ip}:{port} : {e}")
+            joined.append(ip)
+        self.info.emit(
+            f"UDP {port} : joint {', '.join(PTP_MCAST_ALL)} sur {joined}")
         sock.setblocking(False)
         return sock
 

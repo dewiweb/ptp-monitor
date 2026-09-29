@@ -16,7 +16,9 @@ class SourceStats:
         self.msg_types = Counter()
         self.seq_gaps = 0
         self.seq_dups = 0
-        self.last_seq = None
+        # Compteur de séquence PAR type de message : chaque messageType PTP
+        # a sa propre numérotation — les mélanger créerait des gaps fantômes.
+        self.last_seqs = {}
         self.intervals = deque(maxlen=INTERVAL_WINDOW)  # intervalles entre Sync (s)
         self.last_sync_ts = None
         self.reported_silent = False
@@ -30,12 +32,14 @@ class SourceStats:
 
         seq = p.get("sequence_id")
         if seq is not None:
-            if self.last_seq is not None:
-                if seq == self.last_seq:
+            mt = p["msg_type"]
+            last = self.last_seqs.get(mt)
+            if last is not None:
+                if seq == last:
                     self.seq_dups += 1
-                elif seq != (self.last_seq + 1) % 65536:
+                elif seq != (last + 1) % 65536:
                     self.seq_gaps += 1
-            self.last_seq = seq
+            self.last_seqs[mt] = seq
 
         if p["msg_type"] == "Sync" and self.last_sync_ts is not None:
             self.intervals.append(ev["ts"] - self.last_sync_ts)

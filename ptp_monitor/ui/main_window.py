@@ -4,6 +4,7 @@ import binascii
 import csv
 import json
 import os
+import re
 import socket
 import time
 import traceback
@@ -51,6 +52,8 @@ class MainWindow(QMainWindow):
         self.row_index = {}          # (version, src_ip) -> row
         self._announce_props = {}    # src_ip -> tuple props GM annoncées
         self._leader_sync_ok = True
+        self._sync_competitors = set()   # src_ip émettant des Sync v1 concurrents
+        self._gm_competitors = set()     # src_ip annonçant un GM v2 concurrent
 
         self._build_ui()
         self._auto_fetch_oui()
@@ -197,6 +200,22 @@ class MainWindow(QMainWindow):
                 ips.add(info[4][0])
         except OSError:
             pass
+        if len(ips) <= 1:
+            # getaddrinfo() ne retourne souvent qu'une IP sous Windows ;
+            # ipconfig liste toutes les NICs.
+            try:
+                import subprocess
+                out = subprocess.run(
+                    ["ipconfig"], capture_output=True, text=True,
+                    timeout=5).stdout
+                for line in out.splitlines():
+                    m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})\s*$",
+                                  line.strip())
+                    if m and "IPv4" in line:
+                        ips.add(m.group(1))
+            except (OSError, subprocess.SubprocessError):
+                pass
+        ips.discard("127.0.0.1")
         return sorted(ips)
 
     # ---------- Base OUI ----------
@@ -252,6 +271,7 @@ class MainWindow(QMainWindow):
     def _refresh_ifaces(self):
         current = self.iface_combo.currentText()
         self.iface_combo.clear()
+        self.iface_combo.addItem("TOUTES (toutes les interfaces)")
         self.iface_combo.addItems(self._local_ips())
         self.iface_combo.setCurrentText(current)
 
@@ -376,6 +396,7 @@ class MainWindow(QMainWindow):
             if ev["parsed"] is None:
                 rec["parsed"] = None
             self.record_file.write(json.dumps(rec) + "\n")
+            self.record_file.flush()
 
         if self.total_packets == 1:
             self._log("INFO",
@@ -446,9 +467,13 @@ class MainWindow(QMainWindow):
             meta["extra"]["gm_clock_id"] = p["source_uuid"]
         if p["msg_type"] != "Sync":
             return
-        self.chart.add(ev["ts"], st.intervals[-1] if st.intervals else 0,
-                       "ptpv1")
-        if st.intervals:
+        # La courbe ne suit que le leader courant (les Sync d'un éventuel
+        # concurrent restent visibles dans la table et le journal)
+        is_leader = self.leader_v1 in (None, ev["src_ip"])
+        if is_leader:
+            self.chart.add(ev["ts"],
+                           st.intervals[-1] if st.intervals else 0, "ptpv1")
+        if st.intervals and is_leader:
             self._set_card(self.lbl_interval, f"{st.intervals[-1]*1000:.2f} ms")
             stats = st.interval_stats()
             if stats:
@@ -456,19 +481,35 @@ class MainWindow(QMainWindow):
                 self._set_card(self.lbl_jitter,
                                f"{mean:.2f}±{sd:.2f} ({mn:.1f}/{mx:.1f}) ms")
 
-        # Leader = source qui émet les Sync
+        # Leader = source stable qui émet les Sync. Un second émetteur
+        # concurrent est une anomalie (split-brain) : ALERT une fois,
+        # sans flipper la carte à chaque paquet.
         self._leader_sync_ok = True
-        if self.leader_v1 != ev["src_ip"]:
-            old = self.leader_v1
+        if self.leader_v1 is None:
             self.leader_v1 = ev["src_ip"]
-            self.leader_history.append((ev["ts"], old, self.leader_v1))
-            if old:
+            self.leader_history.append((ev["ts"], None, self.leader_v1))
+            self._log("INFO",
+                      f"Leader Dante détecté : {name_or_ip(self.leader_v1)}")
+        elif ev["src_ip"] != self.leader_v1:
+            old_st = self.sources.get(("ptpv1", self.leader_v1))
+            if old_st and old_st.last_sync_ts \
+                    and ev["ts"] - old_st.last_sync_ts > 5.0:
+                # L'ancien leader s'est tu : vraie bascule
+                old = self.leader_v1
+                self.leader_v1 = ev["src_ip"]
+                self.leader_history.append((ev["ts"], old, self.leader_v1))
                 self._log("ALERT",
                           f"CHANGEMENT DE LEADER DANTE : {name_or_ip(old)} → "
                           f"{name_or_ip(self.leader_v1)}",
                           {"old_leader": old, "new_leader": self.leader_v1})
-            else:
-                self._log("INFO", f"Leader Dante détecté : {name_or_ip(self.leader_v1)}")
+            elif ev["src_ip"] not in self._sync_competitors:
+                self._sync_competitors.add(ev["src_ip"])
+                self._log("ALERT",
+                          f"SECONDE SOURCE DE SYNC PTPv1 : "
+                          f"{name_or_ip(ev['src_ip'])} émet des Sync en "
+                          f"concurrence du leader {name_or_ip(self.leader_v1)} "
+                          f"(split-brain possible)",
+                          {"src_ip": ev["src_ip"], "leader": self.leader_v1})
         self._set_card(self.lbl_leader, name_or_ip(self.leader_v1))
 
     def _handle_v2(self, ev, p, st):
@@ -501,11 +542,28 @@ class MainWindow(QMainWindow):
 
         if self.gm_v2 != p["gm_clock_id"]:
             old = self.gm_v2
-            self.gm_v2 = p["gm_clock_id"]
-            if old:
+            # Un annonceur différent qui déclare un autre GM alors que le
+            # précédent annonce encore = GM concurrent, pas vraie bascule
+            prev_announcer_fresh = any(
+                version == "ptpv2" and src != ev["src_ip"]
+                and ev["ts"] - m.get("last_announce_ts", 0) < 5.0
+                for (version, src), m in self.source_meta.items())
+            if old and prev_announcer_fresh \
+                    and ev["src_ip"] not in self._gm_competitors:
+                self._gm_competitors.add(ev["src_ip"])
                 self._log("ALERT",
-                          f"CHANGEMENT DE GRANDMASTER PTPv2 : {old} → {self.gm_v2}",
-                          {"old_gm": old, "new_gm": self.gm_v2})
+                          f"GM PTPv2 CONCURRENT : {name_or_ip(ev['src_ip'])} "
+                          f"annonce {p['gm_clock_id']} alors que {old} "
+                          f"est déjà annoncé",
+                          {"src_ip": ev["src_ip"], "gm": p["gm_clock_id"],
+                           "current_gm": old})
+            else:
+                self.gm_v2 = p["gm_clock_id"]
+                if old:
+                    self._log("ALERT",
+                              f"CHANGEMENT DE GRANDMASTER PTPv2 : {old} → "
+                              f"{self.gm_v2}",
+                              {"old_gm": old, "new_gm": self.gm_v2})
         manuf = oui.oui_lookup(p["gm_clock_id"])
         gm_dev = clock_id_name(p["gm_clock_id"])
         cls = p["gm_class"]
