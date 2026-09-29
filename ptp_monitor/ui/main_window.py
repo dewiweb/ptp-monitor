@@ -446,7 +446,8 @@ class MainWindow(QMainWindow):
             meta["extra"]["gm_clock_id"] = p["source_uuid"]
         if p["msg_type"] != "Sync":
             return
-        self.chart.add(ev["ts"], st.intervals[-1] if st.intervals else 0)
+        self.chart.add(ev["ts"], st.intervals[-1] if st.intervals else 0,
+                       "ptpv1")
         if st.intervals:
             self._set_card(self.lbl_interval, f"{st.intervals[-1]*1000:.2f} ms")
             stats = st.interval_stats()
@@ -471,6 +472,10 @@ class MainWindow(QMainWindow):
         self._set_card(self.lbl_leader, name_or_ip(self.leader_v1))
 
     def _handle_v2(self, ev, p, st):
+        # Courbe bleue : intervalle entre Sync PTPv2
+        if p["msg_type"] == "Sync":
+            self.chart.add(ev["ts"], st.intervals[-1] if st.intervals else 0,
+                           "ptpv2")
         if "gm_clock_id" not in p:
             return
         meta = self.source_meta[("ptpv2", ev["src_ip"])]
