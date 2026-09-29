@@ -1,0 +1,18 @@
+[project]
+name = "ptp-monitor"
+version = "1.0.0"
+description = "Passive PTPv1/PTPv2 clock monitoring for AoIP networks (Dante / AES67)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = ["PySide6>=6.5,<7"]
+
+[project.scripts]
+ptp-monitor = "ptp_monitor.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ptp_monitor*"]
